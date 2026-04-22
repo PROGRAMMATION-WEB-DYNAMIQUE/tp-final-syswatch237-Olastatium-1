@@ -83,7 +83,7 @@ impl fmt::Display for SystemSnapshot {
     }
 }
 
-// --- Erreurs custom (exo 2) --- Etape 2: Gestion d'erreurs avec un enum dédié
+// --- Erreurs custom ---
 
 #[derive(Debug)]
 enum SysWatchError {
@@ -144,7 +144,7 @@ fn collect_snapshot() -> Result<SystemSnapshot, SysWatchError> {
     })
 }
 
-//// Formatage responses (Exo 3) — Simuler une interface textuelle simple
+// --- Formatage des réponses pour le client ---
 
 fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
     let cmd = command.trim().to_lowercase();
@@ -153,7 +153,6 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         "cpu" => format!(
             "[CPU]\n{}\n\nHistorique:\n{}\n",
             snapshot.cpu,
-            // Itérateur : simuler une barre de progression ASCII
             (0..10)
                 .map(|i| {
                     let threshold = (snapshot.cpu.usage_percent / 10.0) as usize;
@@ -186,7 +185,6 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         },
 
         "shutdown" => {
-            // Windows
             std::process::Command::new("shutdown")
                 .args(["/s", "/t", "5"])
                 .spawn()
@@ -203,7 +201,6 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         }
 
         "abort" => {
-            // Annuler un shutdown/reboot en cours
             std::process::Command::new("shutdown")
                 .args(["/a"])
                 .spawn()
@@ -212,8 +209,6 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         }
 
         _ if cmd.starts_with("msg ") => {
-            // Afficher un message dans le terminal de l'étudiant
-            // msg Bonjour tout le monde !
             let text = &cmd[4..];
             println!("\n╔══════════════════════════════════════╗");
             println!("║  MESSAGE DU PROFESSEUR               ║");
@@ -223,10 +218,8 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         }
 
         _ if cmd.starts_with("install ") => {
-            // install <nom-du-package-winget>
-            // ex: install git.git
             let package = cmd[8..].trim().to_string();
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 std::process::Command::new("winget")
                     .args(["install", "--silent", &package])
                     .status()
@@ -253,53 +246,7 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
     }
 }
 
-
-// // Exo 4: Serveur TCP multithreadé —
-// fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
-//     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or("inconnu".to_string());
-//     println!("[+] Connexion de {}", peer);
-//     log_event(&format!("[+] Connexion de {}", peer));
-
-//     // Message de bienvenue
-//     let welcome = concat!(
-//         "╔══════════════════════════════╗\n",
-//         "║   SysWatch v1.0 — ENSPD      ║\n",
-//         "║   Tape 'help' pour commencer ║\n",
-//         "╚══════════════════════════════╝\n",
-//         "> "
-//     );
-//     let _ = stream.write_all(welcome.as_bytes());
-
-//     let reader = BufReader::new(stream.try_clone().expect("Clone stream échoué"));
-
-//     for line in reader.lines() {
-//         match line {
-//             Ok(cmd) => {
-//                 let cmd = cmd.trim().to_string();
-//                 println!("[{}] commande: '{}'", peer, cmd);
-//                 log_event(&format!("[{}] commande: '{}'", peer, cmd));
-
-//                 if cmd.eq_ignore_ascii_case("quit") || cmd.eq_ignore_ascii_case("exit") {
-//                     let _ = stream.write_all(b"Au revoir!\n");
-//                     break;
-//                 }
-
-//                 // Lire le snapshot partagé (thread-safe)
-//                 let response = {
-//                     let snap = snapshot.lock().unwrap();
-//                     format_response(&snap, &cmd)
-//                 };
-
-//                 let _ = stream.write_all(response.as_bytes());
-//                 let _ = stream.write_all(b"> "); // prompt
-//             }
-//             Err(_) => break,
-//         }
-//     }
-
-//     println!("[-] Déconnexion de {}", peer);
-//     log_event(&format!("[-] Déconnexion de {}", peer));
-// }
+// --- Rafraîchissement périodique du snapshot ---
 
 fn snapshot_refresher(snapshot: Arc<Mutex<SystemSnapshot>>) {
     loop {
@@ -315,15 +262,12 @@ fn snapshot_refresher(snapshot: Arc<Mutex<SystemSnapshot>>) {
     }
 }
 
+// --- Journalisation ---
 
 fn log_event(message: &str) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let line = format!("[{}] {}\n", timestamp, message);
-
-    // Écriture console
     print!("{}", line);
-
-    // Écriture fichier — on ignore l'erreur silencieusement (best-effort)
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -333,6 +277,7 @@ fn log_event(message: &str) {
     }
 }
 
+// --- Gestion d'un client (agent) ---
 
 fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
     let peer = stream.peer_addr()
@@ -340,8 +285,9 @@ fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
         .unwrap_or("inconnu".to_string());
     log_event(&format!("[+] Connexion de {}", peer));
 
-    // Étape 1 : demander le token
-    let _ = stream.write_all(b"TOKEN: ");
+    // Étape 1 : demander le token (avec un saut de ligne pour que le master puisse lire)
+    let _ = stream.write_all(b"TOKEN: \n");
+    let _ = stream.flush();
     let mut reader = BufReader::new(stream.try_clone().expect("Clone failed"));
     let mut token_line = String::new();
     if reader.read_line(&mut token_line).is_err() || token_line.trim() != AUTH_TOKEN {
@@ -350,6 +296,7 @@ fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
         return;
     }
     let _ = stream.write_all(b"OK\n");
+    let _ = stream.flush();
     log_event(&format!("[✓] Authentifié: {}", peer));
 
     // Boucle de commandes
@@ -370,7 +317,8 @@ fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
                 };
 
                 let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(b"\nEND\n"); // marqueur fin de réponse
+                let _ = stream.write_all(b"\nEND\n");
+                let _ = stream.flush();
             }
             Err(_) => break,
         }
@@ -379,46 +327,7 @@ fn handle_client(mut stream: TcpStream, snapshot: Arc<Mutex<SystemSnapshot>>) {
     log_event(&format!("[-] Déconnexion de {}", peer));
 }
 
-
-// Main Exo 1: Types métier et affichage — Etape 3: Affichage humain avec le trait Display
-// fn main() {
-//     // Test d'affichage — données fictives pour valider les types
-//     let snapshot = SystemSnapshot {
-//         timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-//         cpu: CpuInfo { usage_percent: 42.5, core_count: 8 },
-//         memory: MemInfo { total_mb: 16384, used_mb: 8192, free_mb: 8192 },
-//         top_processes: vec![
-//             ProcessInfo { pid: 1234, name: "code.exe".to_string(), cpu_usage: 12.3, memory_mb: 512 },
-//             ProcessInfo { pid: 5678, name: "chrome.exe".to_string(), cpu_usage: 8.1, memory_mb: 1024 },
-//         ],
-//     };
-
-//     println!("{}", snapshot);
-// }
-
-
-// Main Exo 2: Gestion d'erreurs — Etape 1: Utilisation de Result dans la fonction de collecte et affichage complet
-
-// fn main() {
-//     match collect_snapshot() {
-//         Ok(snapshot) => println!("{}", snapshot),
-//         Err(e) => eprintln!("ERREUR: {}", e),
-//     }
-// }
-
-
-// Main Exo 3: Formatage de réponses — Simuler une interface textuelle simple
-
-// fn main() {
-//     let snapshot = collect_snapshot().expect("Collecte échouée");
-//     println!("{}", format_response(&snapshot, "cpu"));
-//     println!("{}", format_response(&snapshot, "mem"));
-//     println!("{}", format_response(&snapshot, "ps"));
-//     println!("{}", format_response(&snapshot, "help"));
-// }
-
-// Main Exo 4: Serveur TCP multithreadé — Etape 1: Lancement d'un serveur TCP basique
-
+// --- Point d'entrée principal ---
 
 fn main() {
     println!("SysWatch démarrage...");
